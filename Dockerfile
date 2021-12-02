@@ -183,7 +183,7 @@ VOLUME [ \
 
 # ENTRYPOINT tail -f /dev/null
 
-CMD [ "sh", "/app/run.sh" ]
+# CMD [ "sh", "/app/run.sh" ]
 
 # EXPOSE 8050
 
