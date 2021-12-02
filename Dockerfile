@@ -179,7 +179,7 @@ VOLUME [ \
     "/etc/splash/js-profiles", \
     "/etc/splash/filters", \
     "/etc/splash/lua_modules" \
-]
+    ]
 
 CMD [ "sh", "run.sh" ]
 
