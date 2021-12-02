@@ -181,7 +181,7 @@ VOLUME [ \
     "/etc/splash/lua_modules" \
     ]
 
-CMD [ "sh", "run.sh" ]
+CMD [ "sh", "/app/run.sh" ]
 
 # EXPOSE 8050
 

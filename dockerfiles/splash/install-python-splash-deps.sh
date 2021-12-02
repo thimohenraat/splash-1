@@ -11,6 +11,7 @@ install_python_deps () {
         adblockparser==0.7 \
         xvfbwrapper==0.2.9 \
         funcparserlib==0.3.6 \
+        timeout = 30
         Pillow==5.4.1 \
         attrs==18.2.0 \
         lupa==1.3 && \
