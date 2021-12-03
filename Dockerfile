@@ -182,14 +182,13 @@ VOLUME [ \
     ]
 
 ENTRYPOINT [ \
-    "--filters-path", "/etc/splash/filters", \
-    "--lua-package-path", "/etc/splash/lua_modules/?.lua" \
+    "--filters-path", "/etc/splash/filters" \
     ]
 
 # ENTRYPOINT tail -f /dev/null
 
 # CMD [ "sh", "/app/run.sh" ]
-CMD python3 /app/bin/splash --proxy-profiles-path /etc/splash/proxy-profiles --js-profiles-path /etc/splash/js-profiles --port $PORT --max-timeout 3600
+CMD python3 /app/bin/splash --proxy-profiles-path /etc/splash/proxy-profiles --js-profiles-path /etc/splash/js-profiles --lua-package-path /etc/splash/lua_modules/?.lua --port $PORT --max-timeout 3600
 # CMD python3 /app/bin/splash --proxy-profiles-path /etc/splash/proxy-profiles --js-profiles-path /etc/splash/js-profiles --filters-path /etc/splash/filters --lua-package-path /etc/splash/lua_modules/?.lua --port $PORT --port $PORT --max-timeout 3600
 # EXPOSE 8050
 
