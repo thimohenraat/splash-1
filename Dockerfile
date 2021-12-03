@@ -34,6 +34,6 @@ VOLUME [ \
     "/etc/splash/js-profiles", \
     "/etc/splash/filters", \
     "/etc/splash/lua_modules" \
-]
+    ]
 
 CMD python3 /app/bin/splash --proxy-profiles-path /etc/splash/proxy-profiles --js-profiles-path /etc/splash/js-profiles --lua-package-path /etc/splash/lua_modules/?.lua --port $PORT --max-timeout 3600
