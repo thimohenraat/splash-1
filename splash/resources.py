@@ -7,7 +7,10 @@ import gc
 import time
 import json
 import resource
+from typing import List
 
+from twisted.internet.base import DelayedCall
+from twisted.python.failure import Failure
 from twisted.web.server import NOT_DONE_YET
 from twisted.web.resource import Resource
 from twisted.web.static import File
@@ -16,8 +19,17 @@ from twisted.python import log
 
 import splash
 from splash.argument_cache import ArgumentCache
-from splash.qtrender import (
-    HtmlRender, PngRender, JsonRender, HarRender, JpegRender
+from splash.engines.webkit.render_scripts import (
+    HtmlRender,
+    PngRender,
+    JsonRender,
+    HarRender,
+    JpegRender,
+)
+from splash.engines.chromium.render_scripts import (
+    ChromiumRenderHtmlScript,
+    ChromiumRenderPngScript,
+    ChromiumRenderJpegScript,
 )
 from splash.lua import is_supported as lua_is_supported
 from splash.utils import (
@@ -30,11 +42,11 @@ from splash.utils import (
 from splash import sentry
 from splash.render_options import RenderOptions
 from splash.qtutils import clear_caches
-from splash.exceptions import (
+from splash.errors import (
     BadOption, RenderError, InternalError,
     GlobalTimeoutError, UnsupportedContentType,
     ExpiredArguments,
-)
+    CancelledError)
 
 if lua_is_supported():
     from splash.qtrender_lua import LuaRender
@@ -84,12 +96,15 @@ class BaseRenderResource(_ValidatingResource):
     isLeaf = True
     content_type = "text/html; charset=utf-8"
 
-    def __init__(self, pool, max_timeout, argument_cache):
+    def __init__(self, pool, max_timeout, argument_cache,
+                 browser_engines_enabled, dont_log_args):
         Resource.__init__(self)
         self.pool = pool
         self.js_profiles_path = self.pool.js_profiles_path
         self.max_timeout = max_timeout
         self.argument_cache = argument_cache
+        self.browser_engines_enabled = browser_engines_enabled
+        self.dont_log_args = set(dont_log_args)
 
     def render_GET(self, request):
         #log.msg("%s %s %s %s" % (id(request), request.method, request.path, request.args))
@@ -113,6 +128,7 @@ class BaseRenderResource(_ValidatingResource):
 
         # check arguments before starting the render
         render_options.get_filters(self.pool)
+        render_options.get_engine(browser_engines_enabled=self.browser_engines_enabled)
 
         timeout = render_options.get_timeout()
         pool_d = self._get_render(request, render_options)
@@ -121,10 +137,12 @@ class BaseRenderResource(_ValidatingResource):
 
         pool_d.addCallback(self._cancel_timer, timer)
         pool_d.addCallback(self._write_output, request)
-        pool_d.addErrback(self._on_timeout_error, request, timeout=timeout)
+        pool_d.addErrback(self._on_timeout_error, request,
+                          timeout=timeout, timer=timer)
         pool_d.addErrback(self._on_render_error, request)
         pool_d.addErrback(self._on_bad_request, request)
         pool_d.addErrback(self._on_internal_error, request)
+        pool_d.addErrback(self._on_unhandled_internal_error, request)
         pool_d.addBoth(self._finish_request, request,
                        options=original_options)
         return NOT_DONE_YET
@@ -195,7 +213,16 @@ class BaseRenderResource(_ValidatingResource):
         ex = ExpiredArguments({'expired': expired_args})
         return self._write_error(request, 498, ex)
 
+    def _value_for_logging(self, key, value):
+        if key not in self.dont_log_args:
+            return value
+        return "***"
+
     def _log_stats(self, request, options, error=None):
+        options = {
+            key: self._value_for_logging(key, value)
+            for key, value in options.items()
+        }
         msg = {
             # Anything we retrieve from Twisted request object contains bytes.
             # We have to convert it to unicode first for json.dump to succeed.
@@ -220,9 +247,19 @@ class BaseRenderResource(_ValidatingResource):
         msg = json.dumps(msg).encode("utf8")
         log.msg(msg, system="events")
 
-    def _on_timeout_error(self, failure, request, timeout=None):
+    def _on_timeout_error(self, failure, request, timeout: float = None,
+                          timer: DelayedCall = None):
         failure.trap(defer.CancelledError)
-        ex = GlobalTimeoutError({'timeout': timeout})
+        msg = {}
+        if timer is not None:
+            msg['remaining'] = timer.time - timer.seconds()
+
+        if timer is not None and timer.cancelled:
+            ex = CancelledError(msg)
+            return self._write_error(request, 520, ex)
+
+        msg['timeout'] = timeout
+        ex = GlobalTimeoutError(msg)
         return self._write_error(request, 504, ex)
 
     def _on_render_error(self, failure, request):
@@ -231,7 +268,11 @@ class BaseRenderResource(_ValidatingResource):
         return self._write_error(request, 502, failure.value)
 
     def _on_internal_error(self, failure, request):
-        log.err()
+        failure.trap(InternalError)
+        failure.printTraceback()
+        return self._write_error(request, 502, failure.value)
+
+    def _on_unhandled_internal_error(self, failure, request):
         # failure.printTraceback()
         sentry.capture(failure)
         # only propagate str value to avoid exposing internal details
@@ -244,7 +285,15 @@ class BaseRenderResource(_ValidatingResource):
         return self._write_error(request, 400, failure.value)
 
     def _finish_request(self, failure, request, options):
-        self._log_stats(request, options, error=failure)
+        if isinstance(failure, Failure):
+            # usually failure should be None or dict,
+            # but if _on_internal_error fails (?),
+            # we may get a Failure instance here
+            error = self._format_error(0, failure.value)
+        else:
+            error = failure
+
+        self._log_stats(request, options, error=error)
         if not request._disconnected:
             request.finish()
 
@@ -259,7 +308,9 @@ class RenderHtmlResource(BaseRenderResource):
 
     def _get_render(self, request, options):
         params = options.get_common_params(self.js_profiles_path)
-        return self.pool.render(HtmlRender, options, **params)
+        engine = options.get_engine(self.browser_engines_enabled)
+        script = HtmlRender if engine == "webkit" else ChromiumRenderHtmlScript
+        return self.pool.render(script, options, **params)
 
 
 class ExecuteLuaScriptResource(BaseRenderResource):
@@ -272,8 +323,14 @@ class ExecuteLuaScriptResource(BaseRenderResource):
                  argument_cache,
                  strict,
                  implicit_main,
+                 browser_engines_enabled,
+                 dont_log_args,
                  ):
-        BaseRenderResource.__init__(self, pool, max_timeout, argument_cache)
+        super().__init__(pool=pool,
+                         max_timeout=max_timeout,
+                         argument_cache=argument_cache,
+                         browser_engines_enabled=browser_engines_enabled,
+                         dont_log_args=dont_log_args)
         self.sandboxed = sandboxed
         self.lua_package_path = lua_package_path
         self.lua_sandbox_allowed_modules = lua_sandbox_allowed_modules
@@ -281,6 +338,10 @@ class ExecuteLuaScriptResource(BaseRenderResource):
         self.implicit_main = implicit_main
 
     def _get_render(self, request, options):
+        engine = options.get_engine(self.browser_engines_enabled)
+        if engine != 'webkit':
+            raise BadOption("engine=chromium is not supported yet")
+
         params = dict(
             proxy=options.get_proxy(),
             lua_source=options.get_lua_source(),
@@ -299,7 +360,9 @@ class RenderPngResource(BaseRenderResource):
     def _get_render(self, request, options):
         params = options.get_common_params(self.js_profiles_path)
         params.update(options.get_png_params())
-        return self.pool.render(PngRender, options, **params)
+        engine = options.get_engine(self.browser_engines_enabled)
+        script = PngRender if engine == "webkit" else ChromiumRenderPngScript
+        return self.pool.render(script, options, **params)
 
 
 class RenderJpegResource(BaseRenderResource):
@@ -309,13 +372,19 @@ class RenderJpegResource(BaseRenderResource):
     def _get_render(self, request, options):
         params = options.get_common_params(self.js_profiles_path)
         params.update(options.get_jpeg_params())
-        return self.pool.render(JpegRender, options, **params)
+        engine = options.get_engine(self.browser_engines_enabled)
+        script = JpegRender if engine == "webkit" else ChromiumRenderJpegScript
+        return self.pool.render(script, options, **params)
 
 
 class RenderJsonResource(BaseRenderResource):
     content_type = "application/json"
 
     def _get_render(self, request, options):
+        engine = options.get_engine(self.browser_engines_enabled)
+        if engine != 'webkit':
+            raise BadOption("engine=chromium is not supported yet")
+
         params = options.get_common_params(self.js_profiles_path)
         params.update(options.get_jpeg_params())
         params.update(options.get_include_params())
@@ -328,6 +397,10 @@ class RenderHarResource(BaseRenderResource):
     content_type = "application/json"
 
     def _get_render(self, request, options):
+        engine = options.get_engine(self.browser_engines_enabled)
+        if engine != 'webkit':
+            raise BadOption("engine=chromium is not supported yet")
+
         params = options.get_common_params(self.js_profiles_path)
         params['request_body'] = options.get_request_body()
         params['response_body'] = options.get_response_body()
@@ -441,6 +514,7 @@ class DemoUI(_ValidatingResource):
             'timeout': options.get_timeout(),
             'request_body': options.get_request_body(),
             'response_body': options.get_response_body(),
+            'engine': options.get_engine(),
             'har': 1,
             'png': 1,
             'html': 1,
@@ -465,7 +539,7 @@ class DemoUI(_ValidatingResource):
         params = {k: v for k, v in params.items() if v is not None}
 
         # disable "phases" HAR Viewer feature
-        request.addCookie('phaseInterval', 120000)
+        request.addCookie('phaseInterval', '120000')
 
         return ("""<!DOCTYPE html><html>
         <head>
@@ -567,35 +641,45 @@ class Root(Resource):
                  max_timeout,
                  argument_cache_max_entries,
                  strict_lua_runner,
+                 browser_engines_enabled: List[str],
+                 dont_log_args,
                  ):
         Resource.__init__(self)
         self.argument_cache = ArgumentCache(argument_cache_max_entries)
         self.ui_enabled = ui_enabled
         self.lua_enabled = lua_enabled
+        self.browser_engines_enabled = browser_engines_enabled
+        self.max_timeout = max_timeout
+        self.dont_log_args = dont_log_args
 
-        _args = pool, max_timeout, self.argument_cache
-        self.putChild(b"render.html", RenderHtmlResource(*_args))
-        self.putChild(b"render.png", RenderPngResource(*_args))
-        self.putChild(b"render.jpeg", RenderJpegResource(*_args))
-        self.putChild(b"render.json", RenderJsonResource(*_args))
-        self.putChild(b"render.har", RenderHarResource(*_args))
+        _kwargs = dict(
+            pool=pool,
+            max_timeout=max_timeout,
+            argument_cache=self.argument_cache,
+            browser_engines_enabled=browser_engines_enabled,
+            dont_log_args=self.dont_log_args,
+        )
+        self.putChild(b"render.html", RenderHtmlResource(**_kwargs))
+        self.putChild(b"render.png", RenderPngResource(**_kwargs))
+        self.putChild(b"render.jpeg", RenderJpegResource(**_kwargs))
+        self.putChild(b"render.json", RenderJsonResource(**_kwargs))
+        self.putChild(b"render.har", RenderHarResource(**_kwargs))
 
         self.putChild(b"_debug", DebugResource(pool, self.argument_cache))
         self.putChild(b"_gc", ClearCachesResource(self.argument_cache))
         self.putChild(b"_ping", PingResource())
 
         # backwards compatibility
-        self.putChild(b"debug", DebugResource(pool, self.argument_cache, warn=True))
+        self.putChild(b"debug", DebugResource(pool, self.argument_cache,
+                                              warn=True))
 
         if self.lua_enabled and ExecuteLuaScriptResource is not None:
             lua_kwargs = dict(
-                pool=pool,
                 sandboxed=lua_sandbox_enabled,
                 lua_package_path=lua_package_path,
                 lua_sandbox_allowed_modules=lua_sandbox_allowed_modules,
-                max_timeout=max_timeout,
-                argument_cache=self.argument_cache,
                 strict=strict_lua_runner,
+                **_kwargs,
             )
             self.putChild(b"execute", ExecuteLuaScriptResource(
                 implicit_main=False, **lua_kwargs))
@@ -619,7 +703,6 @@ class Root(Resource):
                 lua_enabled=self.lua_enabled,
                 max_timeout=max_timeout
             ))
-        self.max_timeout = max_timeout
 
     def getChild(self, name, request):
         if name == b"" and self.ui_enabled:

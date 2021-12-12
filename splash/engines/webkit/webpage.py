@@ -1,41 +1,24 @@
 # -*- coding: utf-8 -*-
-from collections import namedtuple
 
 import sip
-from PyQt5.QtWebKitWidgets import QWebPage, QWebView
+from PyQt5.QtWebKitWidgets import QWebPage
 from PyQt5.QtCore import QByteArray
 from twisted.python import log
 import traceback
 
+from splash.browser_tab import WebpageEventLogger
 from splash.har_builder import HarBuilder
-
-RenderErrorInfo = namedtuple('RenderErrorInfo', 'type code text url')
-
-
-class SplashQWebView(QWebView):
-    """
-    QWebView subclass that handles 'close' requests.
-    """
-    onBeforeClose = None
-
-    def closeEvent(self, event):
-        dont_close = False
-        if self.onBeforeClose:
-            dont_close = self.onBeforeClose()
-
-        if dont_close:
-            event.ignore()
-        else:
-            event.accept()
+from splash.errors import RenderErrorInfo
+from splash.qtutils import qurl2ascii
 
 
-class SplashQWebPage(QWebPage):
+class WebkitWebPage(QWebPage):
     """
     QWebPage subclass that:
 
     * changes user agent;
     * logs JS console messages;
-    * handles alert and confirm windows;
+    * handles alert, confirm and prompt windows;
     * returns additional info about render errors;
     * logs HAR events;
     * stores options for various Splash components.
@@ -48,6 +31,7 @@ class SplashQWebPage(QWebPage):
     resource_timeout = 0
     request_body_enabled = False
     response_body_enabled = False
+    http2_enabled = False
 
     def __init__(self, verbosity=0):
         super(QWebPage, self).__init__()
@@ -107,7 +91,7 @@ class SplashQWebPage(QWebPage):
             self.run_callbacks('on_navigation_locked', networkRequest)
             return False
         self.error_info = None
-        return super(SplashQWebPage, self).acceptNavigationRequest(webFrame, networkRequest, navigationType)
+        return super(WebkitWebPage, self).acceptNavigationRequest(webFrame, networkRequest, navigationType)
 
     def javaScriptAlert(self, frame, msg):
         return
@@ -115,13 +99,19 @@ class SplashQWebPage(QWebPage):
     def javaScriptConfirm(self, frame, msg):
         return False
 
+    def javaScriptPrompt(self, frame, msg, default=None):
+        if self.verbosity >= 2:
+            log.msg("javaScriptPrompt, url=%s, msg=%r, default=%r" % (
+                    frame.url().toString(), msg, default))
+        return False, ""  # thanks qutebrowser
+
     def javaScriptConsoleMessage(self, msg, line_number, source_id):
         if self.verbosity >= 2:
             log.msg("JsConsole(%s:%d): %s" % (source_id, line_number, msg), system='render')
 
     def userAgentForUrl(self, url):
         if self.custom_user_agent is None:
-            return super(SplashQWebPage, self).userAgentForUrl(url)
+            return super(WebkitWebPage, self).userAgentForUrl(url)
         else:
             return self.custom_user_agent
 
@@ -134,6 +124,8 @@ class SplashQWebPage(QWebPage):
     # distinguish it from (2) and (3).
     def extension(self, extension, info=None, errorPage=None):
         if extension == QWebPage.ErrorPageExtension:
+            if self.verbosity >= 2:
+                log.msg("ErrorPageExtension in WebkitWebPage.extension")
             # catch the error, populate self.errorInfo and return an error page
 
             info = sip.cast(info, QWebPage.ErrorPageExtensionOption)
@@ -147,10 +139,10 @@ class SplashQWebPage(QWebPage):
                 domain = 'WebKit'
 
             self.error_info = RenderErrorInfo(
-                domain,
-                int(info.error),
-                str(info.errorString),
-                str(info.url.toString())
+                type=domain,
+                code=int(info.error),
+                text=str(info.errorString),
+                url=str(info.url.toString())
             )
 
             # XXX: this page currently goes nowhere
@@ -170,6 +162,8 @@ class SplashQWebPage(QWebPage):
         # handled the extension. Is it correct? When can this method be
         # called with extension which is not ErrorPageExtension if we
         # are returning False in ``supportsExtension`` for such extensions?
+        if self.verbosity >= 1:
+            log.msg("Unhandled condition in WebkitWebPage.extension")
         return True
 
     def supportsExtension(self, extension):
@@ -194,3 +188,43 @@ class SplashQWebPage(QWebPage):
 
     def error_loading(self, load_finished_ok):
         return load_finished_ok and self.error_info is not None
+
+
+class WebkitEventLogger(WebpageEventLogger):
+    """ This class logs various events that happen with QWebPage """
+    def add_web_page(self, web_page: WebkitWebPage) -> None:
+        frame = web_page.mainFrame()
+        # setup logging
+        if self.logger.verbosity >= 4:
+            web_page.loadStarted.connect(self.on_load_started)
+            frame.loadFinished.connect(self.on_frame_load_finished)
+            frame.loadStarted.connect(self.on_frame_load_started)
+            frame.contentsSizeChanged.connect(self.on_contents_size_changed)
+            # TODO: on_repaint
+
+        if self.logger.verbosity >= 3:
+            frame.javaScriptWindowObjectCleared.connect(self.on_javascript_window_object_cleared)
+            frame.initialLayoutCompleted.connect(self.on_initial_layout_completed)
+            frame.urlChanged.connect(self.on_url_changed)
+
+    def on_load_started(self):
+        self.logger.log("loadStarted")
+
+    def on_frame_load_finished(self, ok):
+        self.logger.log("mainFrame().LoadFinished %s" % ok)
+
+    def on_frame_load_started(self):
+        self.logger.log("mainFrame().loadStarted")
+
+    def on_contents_size_changed(self, sz):
+        self.logger.log("mainFrame().contentsSizeChanged: %s" % sz)
+
+    def on_javascript_window_object_cleared(self):
+        self.logger.log("mainFrame().javaScriptWindowObjectCleared")
+
+    def on_initial_layout_completed(self):
+        self.logger.log("mainFrame().initialLayoutCompleted")
+
+    def on_url_changed(self, url):
+        self.logger.log("mainFrame().urlChanged %s" % qurl2ascii(url))
+

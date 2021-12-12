@@ -19,17 +19,17 @@ from splash.tests.utils import NON_EXISTING_RESOLVABLE, SplashServer
 def https_only(func):
     @wraps(func)
     def wrapper(self, *args, **kwargs):
-        try:
-            if self.__class__.https_supported:
-                func(self, *args, **kwargs)
-        except AttributeError:
+        https_supported = getattr(self.__class__, 'https_supported', True)
+        if https_supported:
             func(self, *args, **kwargs)
+        else:
+            pytest.skip("https is not supported in this test")
     return wrapper
 
 
 class DirectRequestHandler(object):
-
     endpoint = "render.html"
+    engine = "webkit"
 
     def __init__(self, ts):
         self.ts = ts
@@ -39,22 +39,18 @@ class DirectRequestHandler(object):
         return "localhost:%s" % self.ts.splashserver.portnum
 
     def request(self, query, endpoint=None, headers=None):
-        url, params = self._url_and_params(endpoint, query)
-        return requests.get(url, params=params, headers=headers)
+        query.setdefault("engine", self.engine)
+        url = self._absolute_url(endpoint)
+        return requests.get(url, params=query, headers=headers)
 
     def post(self, query, endpoint=None, payload=None, headers=None):
-        url, params = self._url_and_params(endpoint, query)
-        return requests.post(url, params=params, data=payload, headers=headers)
+        query.setdefault("engine", self.engine)
+        url = self._absolute_url(endpoint)
+        return requests.post(url, params=query, data=payload, headers=headers)
 
-    def _url_and_params(self, endpoint, query):
+    def _absolute_url(self, endpoint):
         endpoint = endpoint if endpoint is not None else self.endpoint
-        url = urljoin("http://%s/" % self.host, endpoint)
-        if isinstance(query, dict):
-            params = query
-        else:
-            url = "%s?%s" % (url, query)
-            params = None
-        return url, params
+        return urljoin("http://%s/" % self.host, endpoint)
 
 
 @pytest.mark.usefixtures("class_ts")
@@ -185,14 +181,18 @@ class Base(object):
             r = self.request({"url": self.mockurl("jsconfirm"), "timeout": "3"})
             self.assertStatusCode(r, 200)
 
+        def test_jsprompt(self):
+            r = self.request({"url": self.mockurl("jsprompt"), "timeout": "3"})
+            self.assertStatusCode(r, 200)
+
         def test_iframes(self):
             r = self.request({"url": self.mockurl("iframes"), "timeout": "3"})
             self.assertStatusCode(r, 200)
 
         def test_wait(self):
-            r1 = self.request({"url": self.mockurl("jsinterval")})
-            r2 = self.request({"url": self.mockurl("jsinterval")})
-            r3 = self.request({"url": self.mockurl("jsinterval"), "wait": "0.2"})
+            r1 = self.request({"url": self.mockurl("jsinterval"), "wait": "0.1"})
+            r2 = self.request({"url": self.mockurl("jsinterval"), "wait": "0.1"})
+            r3 = self.request({"url": self.mockurl("jsinterval"), "wait": "0.5"})
             self.assertStatusCode(r1, 200)
             self.assertStatusCode(r2, 200)
             self.assertStatusCode(r3, 200)
@@ -282,10 +282,12 @@ class RenderHtmlTest(Base.RenderTest):
     def test_viewport(self):
         r = self.request({'url': self.mockurl('jsviewport'), 'viewport': '300x400'})
         self.assertStatusCode(r, 200)
+        # 300x400 is innerWidth/innerHeight
+        # 300X400 would be outerWidth/outerHeight
         self.assertIn('300x400', r.text)
 
     def test_nonascii_url(self):
-        nonascii_value =  u'тест'
+        nonascii_value = u'тест'
         url = self.mockurl('getrequest') + '?param=' + nonascii_value
         r = self.request({'url': url})
         self.assertStatusCode(r, 200)
@@ -363,6 +365,32 @@ class RenderHtmlTest(Base.RenderTest):
         r = self.request({'url': url})
         self.assertStatusCode(r, 200)
         self.assertIn("GET request", r.text)
+
+    @https_only
+    def test_http2_enabled(self):
+        r = self.request({
+            'url': self.ts.mockserver.https_url("http-version"),
+            'http2': '1',
+        })
+        self.assertStatusCode(r, 200)
+        self.assertIn("http2", r.text)
+
+    @https_only
+    def test_http2_disabled(self):
+        r = self.request({
+            'url': self.ts.mockserver.https_url("http-version"),
+            'http2': '0',
+        })
+        self.assertStatusCode(r, 200)
+        self.assertNotIn("http2", r.text)
+
+    @https_only
+    def test_http2_default(self):
+        r = self.request({
+            'url': self.ts.mockserver.https_url("http-version"),
+        })
+        self.assertStatusCode(r, 200)
+        self.assertNotIn("http2", r.text)
 
 
 class RenderPngTest(Base.RenderTest):
@@ -694,9 +722,9 @@ class RenderJsonTest(Base.RenderTest):
 
     def test_wait(self):
         # override parent's test to make it aware of render.json endpoint
-        r1 = self.request({"url": self.mockurl("jsinterval"), 'html': 1})
-        r2 = self.request({"url": self.mockurl("jsinterval"), 'html': 1})
-        r3 = self.request({"url": self.mockurl("jsinterval"), 'wait': '0.2', 'html': 1})
+        r1 = self.request({"url": self.mockurl("jsinterval"), 'html': 1, "wait": "0.1"})
+        r2 = self.request({"url": self.mockurl("jsinterval"), 'html': 1, "wait": "0.1"})
+        r3 = self.request({"url": self.mockurl("jsinterval"), 'wait': '0.5', 'html': 1})
         self.assertStatusCode(r1, 200)
         self.assertStatusCode(r2, 200)
         self.assertStatusCode(r3, 200)
@@ -939,6 +967,11 @@ class CommandLineOptionsTest(BaseRenderTest):
             )
             self.assertStatusCode(resp, 200)
 
+    def test_browser_engines_invalid(self):
+        with pytest.raises(RuntimeError) as e:
+            with SplashServer(extra_args=['--browser-engines', 'foo']) as splash:
+                pass
+
 
 @pytest.mark.usefixtures("class_ts")
 class TestTestSetup(unittest.TestCase):
@@ -1105,3 +1138,49 @@ class RenderJpegTest(Base.RenderTest):
             r = self.request({'url': self.mockurl("jsrender"),
                               'scale_method': method})
             self.assertStatusCode(r, 400)
+
+
+class InvalidEngineNameRequestHandler(DirectRequestHandler):
+    engine = 'invalid'
+
+
+class InvalidEngineNameTest(BaseRenderTest):
+    request_handler = InvalidEngineNameRequestHandler
+
+    def test_invalid_engine(self):
+        url = self.mockurl('getrequest') + '?code=200'
+        r = self.request({'url': url})
+        self.assertStatusCode(r, 400)
+        self.assertIn("Unknown render engine", r.text)
+
+
+class DisabledEnginesTest(BaseRenderTest):
+    def _request_html(self, splash, params):
+        return requests.get(splash.url('render.html'), params=params, timeout=3.0)
+
+    def test_browser_engines_webkit_disabled(self):
+        with SplashServer(extra_args=['--browser-engines', 'chromium']) as splash:
+            url = self.mockurl('getrequest') + '?code=200'
+            resp = self._request_html(splash, {'url': url, 'engine': 'webkit'})
+            self.assertBadArgument(resp, 'engine')
+
+            resp = self._request_html(splash, {'url': url, 'engine': 'chromium'})
+            self.assertStatusCode(resp, 200)
+
+    def test_browser_engines_chromium_disabled(self):
+        with SplashServer(extra_args=['--browser-engines', 'webkit']) as splash:
+            url = self.mockurl('getrequest') + '?code=200'
+            resp = self._request_html(splash, {'url': url, 'engine': 'webkit'})
+            self.assertStatusCode(resp, 200)
+
+            resp = self._request_html(splash, {'url': url, 'engine': 'chromium'})
+            self.assertBadArgument(resp, 'engine')
+
+    def test_browser_engines_all_enabled(self):
+        with SplashServer(extra_args=['--browser-engines', 'chromium,webkit']) as splash:
+            url = self.mockurl('getrequest') + '?code=200'
+            resp = self._request_html(splash, {'url': url,  'engine': 'webkit'})
+            self.assertStatusCode(resp, 200)
+
+            resp = self._request_html(splash, {'url': url, 'engine': 'chromium'})
+            self.assertStatusCode(resp, 200)

@@ -5,10 +5,13 @@ import resource
 import traceback
 import signal
 import functools
+import faulthandler
 
 from splash import defaults, __version__
 from splash import xvfb
 from splash.qtutils import init_qt_app
+from splash._cmdline_utils import ONOFF, comma_separated_callback
+
 
 
 def install_qtreactor(verbose):
@@ -17,8 +20,10 @@ def install_qtreactor(verbose):
     qt5reactor.install()
 
 
-def parse_opts(jupyter=False, argv=sys.argv):
-    _bool_default = {True:' (default)', False: ''}
+def parse_opts(jupyter=False, argv=None):
+    if argv is None:
+        argv = sys.argv
+    _bool_default = {True: ' (default)', False: ''}
 
     op = optparse.OptionParser()
     op.add_option("-f", "--logfile", help="log file")
@@ -53,6 +58,24 @@ def parse_opts(jupyter=False, argv=sys.argv):
         help="disable Lua sandbox")
     op.add_option("--disable-browser-caches", action="store_true", default=False,
         help="disables in-memory and network caches used by webkit")
+    op.add_option("--browser-engines",
+        default=defaults.BROWSER_ENGINES_ENABLED,
+        action='callback',
+        type='string',
+        callback=comma_separated_callback(
+            is_valid_func=lambda v: v in {'webkit', 'chromium'},
+            error_msg="{invalid} is not a supported --browser-engine",
+        ),
+        help="Comma-separated list of enabled browser engines (default: %s). "
+             "Allowed engines are chromium and webkit." % defaults.BROWSER_ENGINES_ENABLED)
+    op.add_option("--dont-log-args",
+        default=[],
+        action='callback',
+        type='string',
+        callback=comma_separated_callback(),
+        help="Comma-separated list of request args which values "
+             "won't be logged, regardless of the log level. "
+             "Example: lua_source,password")
     op.add_option("--lua-package-path", default="",
         help="semicolon-separated places to add to Lua package.path. "
              "Each place can have a ? in it that's replaced with the module name.")
@@ -75,8 +98,6 @@ def parse_opts(jupyter=False, argv=sys.argv):
             help="number of render slots (default: %default)")
         op.add_option("--max-timeout", type="float", default=defaults.MAX_TIMEOUT,
             help="maximum allowed value for timeout (default: %default)")
-        op.add_option("--manhole", action="store_true",
-            help="enable manhole server")
         op.add_option("--disable-ui", action="store_true", default=False,
             help="disable web UI")
         op.add_option("--disable-lua", action="store_true", default=False,
@@ -86,9 +107,11 @@ def parse_opts(jupyter=False, argv=sys.argv):
             help="maximum number of entries in arguments cache (default: %default)")
 
     opts, args = op.parse_args(argv)
+    if isinstance(opts.browser_engines, str):
+        # default value is not processed by optparse
+        opts.browser_engines = opts.browser_engines.split(',')
 
     if jupyter:
-        opts.manhole = False
         opts.disable_ui = True
         opts.disable_lua = False
         opts.port = None
@@ -148,6 +171,7 @@ def log_splash_version():
         "Qt %s" % verdict['qt'],
         "PyQt %s" % verdict['pyqt'],
         "WebKit %s" % verdict['webkit'],
+        "Chromium %s" % verdict['chromium'],
         "sip %s" % verdict['sip'],
         "Twisted %s" % twisted.version.short(),
     ]
@@ -159,18 +183,8 @@ def log_splash_version():
     log.msg("Python %s" % sys.version.replace("\n", ""))
 
 
-def manhole_server(portnum=None, username=None, password=None):
-    from twisted.internet import reactor
-    from twisted.manhole import telnet
-
-    f = telnet.ShellFactory()
-    f.username = defaults.MANHOLE_USERNAME if username is None else username
-    f.password = defaults.MANHOLE_PASSWORD if password is None else password
-    portnum = defaults.MANHOLE_PORT if portnum is None else portnum
-    reactor.listenTCP(portnum, f)
-
-
 def splash_server(portnum, ip, slots, network_manager_factory, max_timeout,
+                  *,
                   splash_proxy_factory_cls=None,
                   js_profiles_path=None,
                   ui_enabled=True,
@@ -181,6 +195,8 @@ def splash_server(portnum, ip, slots, network_manager_factory, max_timeout,
                   strict_lua_runner=False,
                   argument_cache_max_entries=None,
                   disable_browser_caches=False,
+                  browser_engines_enabled=(),
+                  dont_log_args=None,
                   verbosity=None):
     from twisted.internet import reactor
     from twisted.web.server import Site
@@ -190,13 +206,11 @@ def splash_server(portnum, ip, slots, network_manager_factory, max_timeout,
     from splash import lua
 
     verbosity = defaults.VERBOSITY if verbosity is None else verbosity
-    log.msg("verbosity=%d" % verbosity)
-
     slots = defaults.SLOTS if slots is None else slots
-    log.msg("slots=%s" % slots)
 
-    if argument_cache_max_entries:
-        log.msg("argument_cache_max_entries=%s" % argument_cache_max_entries)
+    log.msg("verbosity={}, slots={}, argument_cache_max_entries={}, max-timeout={}".format(
+        verbosity, slots, argument_cache_max_entries, max_timeout
+    ))
 
     pool = RenderPool(
         slots=slots,
@@ -211,19 +225,15 @@ def splash_server(portnum, ip, slots, network_manager_factory, max_timeout,
         log.msg("WARNING: Lua is not available, but --disable-lua option is not passed")
 
     # HTTP API
-    onoff = {True: "enabled", False: "disabled"}
     log.msg(
-        "Web UI: %s, Lua: %s (sandbox: %s)" % (
-            onoff[ui_enabled],
-            onoff[lua_enabled],
-            onoff[lua_sandbox_enabled],
+        "Web UI: %s, Lua: %s (sandbox: %s), Webkit: %s, Chromium: %s" % (
+            ONOFF[ui_enabled],
+            ONOFF[lua_enabled],
+            ONOFF[lua_sandbox_enabled],
+            ONOFF['webkit' in browser_engines_enabled],
+            ONOFF['chromium' in browser_engines_enabled],
         )
     )
-
-    log.msg(
-        "Server listening on %s:%s" % (ip,portnum)
-    )
-
     root = Root(
         pool=pool,
         ui_enabled=ui_enabled,
@@ -234,9 +244,12 @@ def splash_server(portnum, ip, slots, network_manager_factory, max_timeout,
         max_timeout=max_timeout,
         argument_cache_max_entries=argument_cache_max_entries,
         strict_lua_runner=strict_lua_runner,
+        browser_engines_enabled=list(browser_engines_enabled),
+        dont_log_args=dont_log_args,
     )
     factory = Site(root)
     reactor.listenTCP(portnum, factory, interface=ip)
+    log.msg("Server listening on http://%s:%s" % (ip, portnum))
 
 
 def monitor_maxrss(maxrss):
@@ -267,7 +280,7 @@ def monitor_maxrss(maxrss):
         t.start(60, now=False)
 
 
-def default_splash_server(portnum, ip, max_timeout, slots=None,
+def default_splash_server(portnum, ip, max_timeout, *, slots=None,
                           proxy_profiles_path=None, js_profiles_path=None,
                           js_disable_cross_domain_access=False,
                           filters_path=None, allowed_schemes=None,
@@ -282,6 +295,8 @@ def default_splash_server(portnum, ip, max_timeout, slots=None,
                           verbosity=None,
                           server_factory=splash_server,
                           disable_browser_caches=False,
+                          browser_engines_enabled=(),
+                          dont_log_args=None,
                           ):
     from splash import network_manager
     network_manager_factory = network_manager.NetworkManagerFactory(
@@ -292,7 +307,8 @@ def default_splash_server(portnum, ip, max_timeout, slots=None,
     )
     splash_proxy_factory_cls = _default_proxy_factory(proxy_profiles_path)
     js_profiles_path = _check_js_profiles_path(js_profiles_path)
-    _set_global_render_settings(js_disable_cross_domain_access, private_mode, disable_browser_caches)
+    _set_global_render_settings(js_disable_cross_domain_access, private_mode,
+                                disable_browser_caches)
     return server_factory(
         portnum=portnum,
         ip=ip,
@@ -310,6 +326,8 @@ def default_splash_server(portnum, ip, max_timeout, slots=None,
         verbosity=verbosity,
         max_timeout=max_timeout,
         argument_cache_max_entries=argument_cache_max_entries,
+        browser_engines_enabled=browser_engines_enabled,
+        dont_log_args=dont_log_args,
     )
 
 
@@ -338,8 +356,18 @@ def _check_js_profiles_path(js_profiles_path):
     return js_profiles_path
 
 
-def _set_global_render_settings(js_disable_cross_domain_access, private_mode, disable_browser_caches):
+def _set_global_render_settings(js_disable_cross_domain_access, private_mode,
+                                disable_browser_caches):
     from PyQt5.QtWebKit import QWebSecurityOrigin, QWebSettings
+    from twisted.python import log
+
+    log.msg(
+        "memory cache: %s, private mode: %s, js cross-domain access: %s" % (
+            ONOFF[not disable_browser_caches],
+            ONOFF[private_mode],
+            ONOFF[not js_disable_cross_domain_access]
+        )
+    )
 
     if js_disable_cross_domain_access is False:
         # In order to enable cross domain requests it is necessary to add
@@ -359,25 +387,24 @@ def _set_global_render_settings(js_disable_cross_domain_access, private_mode, di
         settings.setMaximumPagesInCache(0)
 
 
-def main(jupyter=False, argv=sys.argv, server_factory=splash_server):
+def main(jupyter=False, argv=None, server_factory=splash_server):
+    if argv is None:
+        argv = sys.argv
     opts, _ = parse_opts(jupyter, argv)
     if opts.version:
         print(__version__)
         sys.exit(0)
 
-    if not jupyter:
-        start_logging(opts)
-    log_splash_version()
-    bump_nofile_limit()
+    faulthandler.enable()
+
+    start_logging(opts)
 
     with xvfb.autostart(opts.disable_xvfb, opts.xvfb_screen_size) as x:
         xvfb.log_options(x)
-
         install_qtreactor(opts.verbosity >= 5)
-
+        log_splash_version()
+        bump_nofile_limit()
         monitor_maxrss(opts.maxrss)
-        if opts.manhole:
-            manhole_server()
 
         ipnum = opts.ip if hasattr(opts, 'ip') else '0.0.0.0'
 
@@ -401,7 +428,9 @@ def main(jupyter=False, argv=sys.argv, server_factory=splash_server):
             max_timeout=opts.max_timeout,
             argument_cache_max_entries=opts.argument_cache_max_entries,
             server_factory=server_factory,
-            disable_browser_caches=opts.disable_browser_caches
+            disable_browser_caches=opts.disable_browser_caches,
+            browser_engines_enabled=opts.browser_engines,
+            dont_log_args=set(opts.dont_log_args),
         )
         signal.signal(signal.SIGUSR1, lambda s, f: traceback.print_stack(f))
 

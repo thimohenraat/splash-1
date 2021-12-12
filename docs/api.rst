@@ -79,7 +79,7 @@ proxy : string : optional
   Proxy profile name or proxy URL. See :ref:`Proxy Profiles`.
 
   A proxy URL should have the following format:
-  ``[protocol://][user:password@]proxyhost[:port])``
+  ``[protocol://][user:password@]proxyhost[:port]``
 
   Where protocol is either ``http`` or ``socks5``. If port is not specified,
   the port 1080 is used by default.
@@ -158,7 +158,7 @@ headers : JSON array or object : optional
     pairs or a JSON object with header names as keys and header values
     as values.
 
-    "User-Agent" header is special: is is used for all outgoing requests,
+    "User-Agent" header is special: it is used for all outgoing requests,
     unlike other headers.
 
 .. _arg-body:
@@ -227,6 +227,28 @@ html5_media : integer : optional
 
     See also: :ref:`splash-html5-media-enabled`.
 
+.. _arg-http2:
+
+http2 : integer : optional
+    Enable or disable HTTP2 support.
+    Possible values are ``1`` (enable) and ``0`` (disable). Default is 0.
+    HTTP2 support is disabled by default as the current implementation can
+    cause problems (e.g. network 399 errors).
+
+.. _arg-engine:
+
+engine : string : optional
+    Browser engine to use. Allowed values are ``webkit`` (default)
+    and ``chromium``.
+
+    .. warning::
+        engine=chromium is in pre-alpha stage: many features don't work,
+        there are known bugs, including Splash crashes. Use on your own risk!
+
+    Allowed values also depend on Splash startup options:
+    ``--browser-engines`` startup option can be used to disable one of them.
+    Start Splash with ``--browser-engines=webkit`` option to disallow
+    Chromium.
 
 Examples
 ~~~~~~~~
@@ -915,18 +937,18 @@ Example contents of this file::
 
     [rules]
     ; optional, default ".*"
-    whitelist=
+    allowlist=
         .*mywebsite\.com.*
 
-    ; optional, default is no blacklist
-    blacklist=
+    ; optional, default is no denylist
+    denylist=
         .*\.js.*
         .*\.css.*
         .*\.png
 
-whitelist and blacklist are newline-separated lists of regexes.
-If URL matches one of whitelist patterns and matches none of blacklist
-patterns, proxy specified in ``[proxy]`` section is used;
+``allowlist`` and ``denylist`` are newline-separated lists of regexes.
+If URL matches one of the allowlist patterns and matches none of the denylist
+patterns, the proxy specified in the ``[proxy]`` section is used;
 no proxy is used otherwise.
 
 Then, to apply proxy rules according to this profile,

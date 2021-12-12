@@ -285,6 +285,19 @@ to disable it.
 
 .. _Media Source Extensions API: https://developer.mozilla.org/en-US/docs/Web/API/Media_Source_Extensions_API
 
+.. _splash-http2-enabled:
+
+splash.http2_enabled
+--------------------
+
+Enable or disable HTTP2.
+
+**Signature:** ``splash.http2_enabled = true/false``
+
+HTTP2 support is disabled by default as the current implementation can cause
+problems (e.g. network 399 errors). Use ``splash.http2_enabled = true`` to
+enable it.
+
 Methods
 ~~~~~~~
 
@@ -385,7 +398,7 @@ to set User-Agent header it is recommended to use
 splash:wait
 -----------
 
-Wait for ``time`` seconds. When script is waiting WebKit continues
+Wait for ``time`` seconds. When script is waiting browser continues
 processing the webpage.
 
 **Signature:** ``ok, reason = splash:wait{time, cancel_on_redirect=false, cancel_on_error=true}``
@@ -968,7 +981,7 @@ Set JavaScript to load automatically on each page load.
 **Async:** yes, but only when an URL of a remote resource is passed.
 
 :ref:`splash-autoload` allows to execute JavaScript code at each page load.
-:ref:`splash-autoload` doesn't doesn't execute the passed
+:ref:`splash-autoload` doesn't execute the passed
 JavaScript code itself. To execute some code once, *after* page is loaded
 use :ref:`splash-runjs` or :ref:`splash-jsfunc`.
 
@@ -2315,6 +2328,7 @@ As of now, this table contains:
 * ``qt`` - (string) Qt version
 * ``pyqt`` - (string) PyQt version
 * ``webkit`` - (string) WebKit version
+* ``chromium`` - (string) Chromium version
 * ``sip`` - (string) SIP version
 * ``twisted`` - (string) Twisted version
 

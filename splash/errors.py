@@ -1,4 +1,15 @@
 # -*- coding: utf-8 -*-
+import attr
+
+
+@attr.s
+class RenderErrorInfo:
+    type = attr.ib()
+    code = attr.ib()
+    text = attr.ib()
+    url = attr.ib()
+
+
 class BadOption(Exception):
     """ Incorrect HTTP API arguments """
     pass
@@ -12,6 +23,10 @@ class RenderError(Exception):
 class InternalError(Exception):
     """ Unhandled internal error """
     pass
+
+
+class CancelledError(Exception):
+    """ Render is cancelled """
 
 
 class GlobalTimeoutError(Exception):
@@ -47,12 +62,9 @@ class JsError(Exception):
     pass
 
 
-class OneShotCallbackError(Exception):
-    """ A one shot callback was called more than once. """
-    pass
-
-
 class DOMError(Exception):
     """ Error occurred during DOM operations"""
     NOT_IN_DOM_ERROR = 'NOT_IN_DOM_ERROR'
     NOT_COMPATIBLE_NODE_ERROR = 'NOT_COMPATIBLE_NODE_ERROR'
+
+

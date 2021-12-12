@@ -1,3 +1,5 @@
+# browser engines
+BROWSER_ENGINES_ENABLED = "webkit,chromium"
 
 # timeouts
 TIMEOUT = 30
@@ -11,9 +13,9 @@ MAX_TIMEOUT = 90.0
 VIEWPORT_SIZE = '1024x768'
 
 # Window size limitations.
-VIEWPORT_MAX_WIDTH = 20000
-VIEWPORT_MAX_HEIGTH = 20000
-VIEWPORT_MAX_AREA = 4000*4000
+VIEWPORT_MAX_WIDTH = 40000
+VIEWPORT_MAX_HEIGTH = 40000
+VIEWPORT_MAX_AREA = 1280 * VIEWPORT_MAX_HEIGTH  # support max height @ 1280 width
 
 MAX_WIDTH = 1920
 MAX_HEIGTH = 1080
@@ -64,12 +66,9 @@ SHOW_HAR = 0
 # servers
 SPLASH_PORT = 8050
 SPLASH_IP = '0.0.0.0'
-MANHOLE_PORT = 5023
-MANHOLE_USERNAME = 'admin'
-MANHOLE_PASSWORD = 'admin'
 
 # pool options
-SLOTS = 50
+SLOTS = 20
 
 # argument cache option
 ARGUMENT_CACHE_MAX_ENTRIES = 500
@@ -103,3 +102,7 @@ WEBGL_ENABLED = True
 # Media Source Extension API
 # it is enabled by default at least to make html5test.com work
 MEDIA_SOURCE_ENABLED = True
+
+# HTTP2
+CHROMIUM_HTTP2_ENABLED = True
+WEBKIT_HTTP2_ENABLED = False

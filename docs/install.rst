@@ -6,95 +6,33 @@ Installation
 Linux + Docker
 --------------
 
-1. Install Docker_.
+1. Install Docker_. Make sure Docker version >= 17 is installed.
 2. Pull the image::
 
        $ sudo docker pull scrapinghub/splash
 
 3. Start the container::
 
-       $ sudo docker run -p 8050:8050 -p 5023:5023 scrapinghub/splash
+       $ sudo docker run -it -p 8050:8050 --rm scrapinghub/splash
 
-4. Splash is now available at 0.0.0.0 at ports
-   8050 (http) and 5023 (telnet).
+4. Splash is now available at 0.0.0.0 at port 8050 (http).
 
 OS X + Docker
 -------------
 
 1. Install Docker_ for Mac (see https://docs.docker.com/docker-for-mac/).
+   Make sure Docker version >= 17 is installed.
 2. Pull the image::
 
        $ docker pull scrapinghub/splash
 
 3. Start the container::
 
-       $ docker run -p 8050:8050 -p 5023:5023 scrapinghub/splash
+       $ docker run -it -p 8050:8050 --rm scrapinghub/splash
 
-5. Splash is available at 0.0.0.0 address at ports
-   8050 (http) and 5023 (telnet).
+5. Splash is available at 0.0.0.0 address at port 8050 (http).
 
 .. _Docker: http://docker.io
-
-
-.. _manual-install-ubuntu:
-
-Ubuntu 16.04 (manual way)
--------------------------
-
-.. warning::
-
-    On desktop machines it is often better to use Docker.
-    Use manual installation with care; at least read the
-    provision.sh script.
-
-1. Clone the repo from GitHub::
-
-      $ git clone https://github.com/scrapinghub/splash/
-
-2. Install dependencies::
-
-      $ cd splash/dockerfiles/splash
-      $ sudo cp ./qt-installer-noninteractive.qs /tmp/script.qs
-      $ sudo ./provision.sh \
-                 prepare_install \
-                 install_msfonts \
-                 install_extra_fonts \
-                 install_deps \
-                 install_flash \
-                 install_qtwebkit_deps \
-                 install_official_qt \
-                 install_qtwebkit \
-                 install_pyqt5 \
-                 install_python_deps
-
-   Change back to the parent directory of splash, i.e. `cd ~`,
-   then run::
-
-        $ sudo pip3 install splash/
-
-To run the server execute the following command::
-
-    python3 -m splash.server
-
-Run ``python3 -m splash.server --help`` to see options available.
-
-By default, Splash API endpoints listen to port 8050 on all available
-IPv4 addresses. To change the port use ``--port`` option::
-
-    python3 -m splash.server --port=5000
-
-.. note::
-
-    Official Docker image uses Ubuntu 16.04; commands above are similar to
-    commands executed in Dockerfile. The main difference is that dangerous
-    ``provision.sh`` remove... commands are not executed; they allow to save
-    space in a Docker image, but can break unrelated software on a
-    desktop system.
-
-Required Python packages
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. literalinclude:: ../requirements.txt
 
 .. _splash and docker:
 
@@ -182,3 +120,49 @@ You may have to change FROM line in :file:`dockerfiles/splash-jupyter/Dockerfile
 if you want it to be based on your local Splash Docker container.
 
 .. _source code: https://github.com/scrapinghub/splash
+
+
+Custom qtwebkit binaries
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+Pass URL of binaries archive in docker build argument, e.g.::
+
+    docker build \
+        --build-arg WEBKIT_URL=https://github.com/whalebot-helmsman/qtwebkit/releases/download/5.14.1-5.212.0-alpha-4/5.14.1-5.212.0-alpha-4.7z \
+        .
+
+Custom qtwebkit build
+---------------------
+
+You need a special container for this. There is one in Dockerfile for splash::
+
+    docker build --target qtwebkitbuilder-base . -t qtwebkit-builder
+
+Checkout qtwebkit code and mount it to a build container::
+
+    git clone git@github.com:qtwebkit/qtwebkit.git ../qtwebkit
+    docker run --rm -it -v `pwd`/../qtwebkit:/qtwebkit qtwebkit-builder
+
+To build qtwebkit from sources run next commands inside the container::
+
+     cd /qtwebkit
+     mkdir build
+     cd build
+     cmake -G Ninja -DPORT=Qt -DCMAKE_BUILD_TYPE=Release ..
+     ninja -j 8
+     ninja install
+     /tmp/create-package.sh install_manifest.txt '' 7z
+     7z l -ba build.7z  | head -n  10
+         2020-05-29 13:57:20 D....            0            0  include
+         2020-05-29 13:57:20 D....            0            0  include/QtWebKit
+         2020-05-29 13:57:20 D....            0            0  include/QtWebKit/5.212.0
+         2020-05-29 13:57:20 D....            0            0  include/QtWebKit/5.212.0/QtWebKit
+         2020-05-29 13:57:20 D....            0            0  include/QtWebKit/5.212.0/QtWebKit/private
+         2020-05-29 13:57:20 D....            0            0  include/QtWebKitWidgets
+         2020-05-29 13:57:20 D....            0            0  include/QtWebKitWidgets/5.212.0
+         2020-05-29 13:57:20 D....            0            0  include/QtWebKitWidgets/5.212.0/QtWebKitWidgets
+         2020-05-29 13:57:20 D....            0            0  include/QtWebKitWidgets/5.212.0/QtWebKitWidgets/private
+         2020-05-29 13:57:20 D....            0            0  lib
+
+Make `build.7z` available by HTTP protocol. Assets files of release section on
+a github is a good place for this.

@@ -1,6 +1,142 @@
 Changes
 =======
 
+3.5 (2020-06-16)
+----------------
+
+* Upgraded some dependencies, fixing some crashes:
+  * qtwebkit 5.212.0-alpha-4
+  * Qt 5.14.1
+  * PyQt 5.14.2
+  * PyQtWebEngine 5.14.0
+  * SIP 4.19.22
+* It is now possible to build Splash with a custom qtwebkit binary or build
+* Improved the error message about out-of-range viewports
+* Enabled logs on Jupyter Notebook
+* Fixed a few typos in the documentation
+* Fixed Qt installation on Docker after upstream changes to the installer
+
+
+3.4.1 (2020-01-09)
+------------------
+
+HTTP2 support is now disabled by default when using the default Splash engine,
+WebKit. We discovered that it does not work properly on some websites, which
+results in ``network399`` errors or incorrect rendering (if those
+``network399`` errors happen for HTML resources such as style of script files).
+
+It can be enabled with the :ref:`http2 <arg-http2>` argument, and with
+:ref:`request:set_http2_enabled <splash-request-set-http2-enabled>` or
+:ref:`splash-http2-enabled` in Lua scripts.
+
+
+3.4 (2019-10-25)
+----------------
+
+In this release qtwebkit is updated to a more recent version.
+It is still the same rendering engine, but with some bugs fixed
+(e.g. handling of redirects where ``#`` is present),
+and with HTTP2 support enabled.
+
+In addition to webkit, Splash 3.4 got an experimental
+Chromium support (v73.0.3683.105); it can be enabled per-request using
+:ref:`engine <arg-engine>` argument of render.html, render.png and render.jpeg
+endpoints: ``engine=chromium``. It is in pre-alpha stage, and not suggested
+to use in production: many (most) features don't work, there are known bugs.
+
+Main new features:
+
+* Splash now supports HTTP2, and it's enabled by default. It can be
+  disabled with :ref:`http2 <arg-http2>` argument, and with
+  :ref:`request:set_http2_enabled <splash-request-set-http2-enabled>`
+  or :ref:`splash-http2-enabled` in Lua scripts.
+* new ``--dont-log-args`` startup option allows to replace certain
+  argument values with ``"***"`` in logs. Use it for sensitive data or for
+  arguments with long values which you don't want in logs, e.g.
+  ``--dont-log-args=lua_source,mypassword``. Note that sensitive data
+  may still appear in logs, e.g. if you pass it
+  via GET parameters instead of POST.
+
+Other improvements and bug fixes:
+
+* ``--browser-engines`` startup option allows to disable browser
+  engines globally;
+* Max allowed viewport size is increased.
+* For requests which are cancelled (e.g. because client closed a connection)
+  GlobalTimeoutError error no longer appears in logs; it is CancelledError
+  now instead.
+* In case of timeouts, error dict returned to the user now contains
+  "remaining" field with the time remaining, in seconds.
+  It should be negative in most cases (no time remaining => timeout happens).
+  Requests are cancelled not at exact timeout time, there is a small
+  difference, and "remaining" field gives a visibility into that.
+* Better log messages on segfaults (faulthandler is enabled).
+* More robust handling of internal errors in the API.
+* DelayedCall objects are now tracked.
+* Fixed incorrect exception when error happens in ``splash:autoload()`` script.
+* Dockerfile is rewritten to use multi-stage builds; ``provision.sh``
+  script is split into several smaller scripts. This makes development easier,
+  e.g. large downloads (qt, etc.) are now cached.
+* Testing improvements.
+
+Dependency updates:
+
+* qtwebkit is updated to 5.212/1570542016 snapshot.
+* Qt is updated to 5.13.1; PyQt is updated to  5.13.1.
+* Ubuntu 18.04 is used as the base docker image.
+* Splash now uses Python 3.6.
+* Twisted is updated to 19.7.0.
+
+3.3.1 (2019-02-21)
+------------------
+
+* Fix a crash in :ref:`splash-wait-for-resume` - Splash used to crash when
+  ``resume()`` or ``error()`` are called more than once, e.g. by delayed JS
+  code;
+* new FAQ section about debugging Splash crashes.
+
+3.3 (2019-02-06)
+----------------
+
+Backwards incompatible:
+
+* ``--manhole`` support is dropped for now: it was untested and
+  not really documented, and it stopped working after software upgrades;
+* default ``--slots`` value is now 20 instead of 50
+  (which is still too high for most practical tasks).
+
+New features:
+
+* :ref:`splash-on-navigation-locked` allows to register a function to
+  be called before a request is discarded when navigation is locked.
+* new ``--disable-browser-caches`` command-line option allows to disable
+  browser caching. See :ref:`why-css-images` for an use case.
+* :ref:`request_body <arg-request-body>` and :ref:`splash-request-body-enabled`
+  allow to enable request bodies in HAR output and :ref:`splash-on-response`
+  callbacks.
+
+Bug fixes:
+
+* fixed crash on pages which call ``window.prompt``, prompts are discarded now;
+* fixed ``response.request.method`` and ``response.request.url`` in
+  :ref:`splash-on-response` callbacks;
+* fixed an edge case with logging causing an exception;
+* proper log level is used for "image is trimmed vertically" message.
+
+Other improvements:
+
+* qt5reactor is upgraded to 0.5 - this should slightly reduce idle CPU usage;
+* Twisted is upgraded from 16.1.0 to 18.9.0;
+* PyQt5 is upgraded from 5.9 to 5.9.2;
+* Pillow is upgraded to 5.4.1 - as a side effect, taking large JPEG screenshots
+  should use slightly less RAM;
+* a workaround for JPEG + transparency on a web page is removed, as it seems
+  to do nothing;
+* Splash-Jupyter is updated to latest jupyter (ipykernel==5.1.0,
+  notebook==5.7.4);
+* testing improvements;
+* typo fixes and documentation improvements.
+
 3.2 (2018-02-15)
 ----------------
 
@@ -72,7 +208,7 @@ New features:
   ``function main(splash, args) ... end``;
 * new :ref:`splash-scroll-position` attribute allows to get and set
   window scroll position;
-* Qt is upgraded to 5.9.1, PyQT is upgraded to 5.9;
+* Qt is upgraded to 5.9.1, PyQt is upgraded to 5.9;
 * official Docker image now uses Ubuntu 16.04.
 
 Other changes and bug fixes:

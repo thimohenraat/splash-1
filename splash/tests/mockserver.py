@@ -107,6 +107,18 @@ document.getElementById("p1").innerHTML="After";
 </html>
 """)
 
+JsPrompt = _html_resource("""
+<html>
+<body>
+<p id="p1">Before</p>
+<script>
+var result = prompt("are you sure?");
+document.getElementById("p1").innerHTML = "After " + result;
+</script>
+</body>
+</html>
+""")
+
 JsInterval = _html_resource("""
 <html><body>
 <div id='num'>not started</div>
@@ -115,7 +127,7 @@ var num=0;
 setInterval(function(){
     document.getElementById('num').innerHTML = num;
     num += 1;
-}, 1);
+}, 200);
 </script>
 </body></html>
 """)
@@ -127,6 +139,12 @@ JsViewport = _html_resource("""
 document.write(window.innerWidth);
 document.write('x');
 document.write(window.innerHeight);
+
+document.write("\\n");
+
+document.write(window.outerWidth);
+document.write('X');
+document.write(window.outerHeight);
 </script>
 </body></html>
 """)
@@ -756,7 +774,7 @@ VariousElementsPage = _html_resource("""
 <html>
 <head>
 <style>
-  html, body { margin: 0; padding: 0; }
+  html, body { margin: 0; padding: 0; height: 100%% }
 </style>
 </head>
 <body>
@@ -995,6 +1013,43 @@ class InvalidStatusMessageResource(Resource):
         return b'ok'
 
 
+class RedirectAndHashtagsResource(Resource):
+    attempts = 0
+
+    def render_GET(self, request):
+        # redirect to same url on every other request
+        if self.attempts % 2 == 0:
+            request.setResponseCode(302)
+            request.setHeader(b"Location", request.uri)
+            self.attempts += 1
+            return b""
+        else:
+            request.setResponseCode(200)
+            return b"""
+            <html><head></head><body>Hello world</body></html>
+            """
+
+
+class HttpVersionResource(Resource):
+    """ Endpoint for checking if a client used http2 or not. """
+    def render(self, request):
+        return self.get_protocol_name(request).encode('utf8')
+
+    @classmethod
+    def get_protocol_name(cls, request):
+        try:
+            from twisted.web._http2 import H2Stream
+            if isinstance(request.channel, H2Stream):
+                return 'http2'
+        except ImportError:
+            pass
+        from twisted.web.http import HTTPChannel
+        if isinstance(request.channel, HTTPChannel):
+            # FIXME: it doesn't distinguish between 1.0 and 1.1
+            return 'http/1.1'
+        return "unknown"
+
+
 class Index(Resource):
     isLeaf = True
 
@@ -1046,6 +1101,7 @@ class Root(Resource):
         self.putChild(b"jsrender", JsRender())
         self.putChild(b"jsalert", JsAlert())
         self.putChild(b"jsconfirm", JsConfirm())
+        self.putChild(b"jsprompt", JsPrompt())
         self.putChild(b"jsinterval", JsInterval())
         self.putChild(b"jsviewport", JsViewport())
         self.putChild(b"jspost", JsPostResource())
@@ -1100,8 +1156,10 @@ class Root(Resource):
         self.putChild(b"meta-redirect1", MetaRedirect1())
         self.putChild(b"meta-redirect-target", MetaRedirectTarget())
         self.putChild(b"http-redirect", HttpRedirectResource())
+        self.putChild(b"redirect-hash", RedirectAndHashtagsResource())
 
         self.putChild(b"do-post", XHRPostPage())
+        self.putChild(b"http-version", HttpVersionResource())
 
         self.putChild(b"", Index(self.children))
 

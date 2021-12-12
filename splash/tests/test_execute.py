@@ -12,7 +12,7 @@ import pytest
 
 lupa = pytest.importorskip("lupa")
 
-from splash.exceptions import ScriptError
+from splash.errors import ScriptError
 from splash.qtutils import has_min_qt_version
 from splash import version_info
 from splash.har_builder import HarBuilder
@@ -677,10 +677,16 @@ class WaitForResumeTest(BaseLuaRenderTest):
         kwargs.setdefault('endpoint', endpoint)
         return super().request_lua(code, query, **kwargs)
 
-    def _wait_for_resume_request(self, js, timeout=1.0):
+    def _wait_for_resume_request(self, js, timeout=1.0, wait=0):
         return self.request_lua("""
         function main(splash)
-            local result, error = splash:wait_for_resume([[%s]], %.1f)
+            local result, error = splash:wait_for_resume(
+                splash.args.wfr_js, splash.args.wfr_timeout
+            )            
+            
+            if splash.args.wait ~= 0 then
+                assert(splash:wait(splash.args.wait))
+            end
             local response = {}
 
             if result ~= nil then
@@ -692,7 +698,7 @@ class WaitForResumeTest(BaseLuaRenderTest):
 
             return response
         end
-        """ % (js, timeout))
+        """, query={"wfr_js": js, "wfr_timeout": timeout, "wait": wait})
 
     def test_return_undefined(self):
         resp = self._wait_for_resume_request("""
@@ -957,7 +963,7 @@ class WaitForResumeTest(BaseLuaRenderTest):
                     splash.resume('not ok');
                 }, 500);
             }
-        """)
+        """, wait=1)
         self.assertStatusCode(resp, 200)
         self.assertEqual(resp.json(), {"value": "ok", "value_type": "string"})
 
@@ -1521,10 +1527,11 @@ class GoTest(BaseLuaRenderTest):
         resp = self.request_lua("""
         function main(splash)
             local ok, reason = splash:go(splash.args.url)
-            return {ok=ok, reason=reason}
+            return {ok=ok, reason=reason, html=splash:html()}
         end
         """, {"url": url})
         self.assertStatusCode(resp, 200)
+        print(resp.json())
         return resp.json()
 
     def _geturl(self, code, empty=False):
@@ -1578,10 +1585,15 @@ class GoTest(BaseLuaRenderTest):
         self.assertEqual(err['info']['argument'], 'url')
 
     @unittest.skipIf(NON_EXISTING_RESOLVABLE, "non existing hosts are resolvable")
-    def test_go_error(self):
-        data = self.go_status("non-existing")
+    def test_go_host_not_found(self):
+        data = self.go_status("http://non-existing")
         self.assertEqual(data.get('ok', False), False)
-        self.assertEqual(data["reason"], "network301")
+        self.assertEqual(data["reason"], "network3")  # HostNotFoundError
+
+    def test_go_protocol_unknown(self):
+        data = self.go_status("abcd://non-existing")
+        self.assertEqual(data.get('ok', False), False)
+        self.assertEqual(data["reason"], "network301")  # Protocol Unknown
 
     def test_go_multiple(self):
         resp = self.request_lua("""
@@ -1850,6 +1862,24 @@ class GoTest(BaseLuaRenderTest):
         """, {"url": self.mockurl('postrequest')})
         self.assertStatusCode(resp, 400)
         self.assertIn("request body must be a string", resp.text)
+
+    def test_go_redirect_hashurl_status_200(self):
+        resp = self.request_lua("""
+        function main(splash)
+            assert(splash:go(splash.args.url))
+            return splash:url()
+        end""", {"url": self.mockurl("jsrender#keep-this-part")})
+        self.assertStatusCode(resp, 200)
+        self.assertIn("jsrender#keep-this-part", resp.text)
+
+    def test_go_redirect_hashurl_status_302(self):
+        resp = self.request_lua("""
+        function main(splash)
+            assert(splash:go(splash.args.url))
+            return splash:url()
+        end""", {"url": self.mockurl("redirect-hash#keep-this-part")})
+        self.assertStatusCode(resp, 200)
+        self.assertIn("redirect-hash#keep-this-part", resp.text)
 
 
 class ResourceTimeoutTest(BaseLuaRenderTest):
@@ -3289,12 +3319,12 @@ end
             ('{100, "a"}', 'a number is required'),
             ('{100, {}}', 'a number is required'),
 
-            ('{100, -1}', 'Viewport is out of range'),
-            ('{100, 0}', 'Viewport is out of range'),
-            ('{100, 99999}', 'Viewport is out of range'),
-            ('{1, -100}', 'Viewport is out of range'),
-            ('{0, 100}', 'Viewport is out of range'),
-            ('{99999, 100}', 'Viewport is out of range'),
+            ('{100, -1}', 'Viewport.* is out of range.*'),
+            ('{100, 0}', 'Viewport.* is out of range.*'),
+            ('{100, 99999}', 'Viewport.* is out of range.*'),
+            ('{1, -100}', 'Viewport.* is out of range.*'),
+            ('{0, 100}', 'Viewport.* is out of range.*'),
+            ('{99999, 100}', 'Viewport.* is out of range.*'),
         ]
 
         def run_test(size_str):
@@ -3850,6 +3880,56 @@ class Html5MediaTest(BaseLuaRenderTest):
             """, {'js': self.HTML5_VIDEO_SUPPORTED_JS, 'enabled': enabled})
             self.assertStatusCode(resp, 200)
             self.assertEqual(resp.json(), {'enabled': enabled})
+
+
+class HTTP2Test(BaseLuaRenderTest):
+    def _http_version_url(self):
+        return self.ts.mockserver.https_url("http-version")
+
+    def request_http_version(self, enabled):
+        return self.request_lua("""
+        function main(splash, args)            
+            splash.http2_enabled = args.enabled
+            assert(splash:go(args.url))
+            return splash:html()
+        end
+        """, {"enabled": enabled, "url": self._http_version_url()})
+
+    def test_defaults(self):
+        resp = self.request_lua("""
+        function main(splash, args)
+            assert(splash:go(args.url))
+            return splash:html()
+        end
+        """, {"url": self._http_version_url()})
+        self.assertStatusCode(resp, 200)
+        if defaults.WEBKIT_HTTP2_ENABLED:
+            self.assertIn("http2", resp.text)
+        else:
+            self.assertNotIn("http2", resp.text)
+
+    def test_enable(self):
+        resp = self.request_http_version(1)
+        self.assertStatusCode(resp, 200)
+        self.assertIn("http2", resp.text)
+
+    def test_disable(self):
+        resp = self.request_http_version(0)
+        self.assertStatusCode(resp, 200)
+        self.assertNotIn("http2", resp.text)
+
+    def test_enable_per_request(self):
+        resp = self.request_lua("""
+        function main(splash, args)
+            splash.http2_enabled = false
+            splash:on_request(function(req)
+                req:set_http2_enabled(true)
+            end)
+            assert(splash:go(args.url))
+            return splash:html()
+        end""", {"url": self._http_version_url()})
+        self.assertStatusCode(resp, 200)
+        self.assertIn("http2", resp.text)
 
 
 class MediaSourceTest(BaseLuaRenderTest):

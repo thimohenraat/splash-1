@@ -4,7 +4,7 @@ import json
 
 from splash import defaults
 from splash.utils import to_bytes, path_join_secure
-from splash.exceptions import BadOption
+from splash.errors import BadOption
 
 
 class RenderOptions(object):
@@ -46,7 +46,7 @@ class RenderOptions(object):
                 if b'application/json' in content_type:
                     try:
                         content = request.content.read().decode('utf-8')
-                        data.update(json.loads(content, encoding='utf8'))
+                        data.update(json.loads(content))
                     except ValueError as e:
                         raise BadOption({
                             'type': 'invalid_json',
@@ -353,6 +353,24 @@ class RenderOptions(object):
     def get_html5_media(self):
         return self._get_bool("html5_media", defaults.HTML5_MEDIA_ENABLED)
 
+    def get_engine(self, browser_engines_enabled=None):
+        engine = self.get("engine", default="webkit", type=str)
+        if engine not in {"webkit", "chromium"}:
+            self.raise_error("engine", "Unknown render engine {}".format(engine))
+        if browser_engines_enabled is not None:
+            if engine not in browser_engines_enabled:
+                self.raise_error("engine", "Disabled render engine {}".format(engine))
+        return engine
+
+    def get_http2(self):
+        engine = self.get_engine()
+        if self.get_engine() == "webkit":
+            default = defaults.WEBKIT_HTTP2_ENABLED
+        else:
+            assert engine == 'chromium'
+            default = defaults.CHROMIUM_HTTP2_ENABLED
+        return self._get_bool("http2", default)
+
     def get_common_params(self, js_profiles_path):
         wait = self.get_wait()
         return {
@@ -370,6 +388,7 @@ class RenderOptions(object):
             'http_method': self.get_http_method(),
             'body': self.get_body(),
             'html5_media': self.get_html5_media(),
+            'http2': self.get_http2(),
             # 'lua': self.get_lua(),
         }
 
@@ -422,5 +441,5 @@ def validate_size_str(size_str):
     else:
         if not ((0 < w <= max_width) and (0 < h <= max_heigth) and
                     (w * h < max_area)):
-            raise ValueError("Viewport is out of range (%dx%d, area=%d)" %
-                             (max_width, max_heigth, max_area))
+            raise ValueError("Viewport (%dx%d, area=%d) is out of range (%dx%d, area=%d)" %
+                             (w, h, w * h, max_width, max_heigth, max_area))

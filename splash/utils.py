@@ -1,3 +1,5 @@
+import array
+
 import os
 import gc
 import sys
@@ -79,23 +81,42 @@ def get_num_fds():
 def get_alive():
     """ Return counts of alive objects. """
     relevant_types = {
-        'SplashQWebPage', 'SplashQNetworkAccessManager',
+        # general QT objects
+        'QSize', 'QBuffer', 'QPainter', 'QImage', 'QUrl', 'QTimer',
+
+        # Twisted objects
+        'Request', 'Deferred', 'DelayedCall',
+
+        # API objects
         'HtmlRender', 'PngRender', 'JsonRender', 'HarRender', 'LuaRender',
+
+        # QtWebKit objects
         'QWebView', 'QWebPage', 'QWebFrame',
         'QNetworkRequest', 'QNetworkReply', 'QNetworkProxy',
-        'QSize', 'QBuffer', 'QPainter', 'QImage', 'QUrl', 'QTimer',
+
+        # QtWebKit-based objects
+        'WebkitWebPage', 'SplashQNetworkAccessManager',
         'SplashCookieJar', 'OneShotCallbackProxy',
+        'EventHandlersStorage', 'EventsStorage', ' ElementsStorage',
+        'WebkitBrowserTab',
+        'SplashWebkitHttpClient', 'JavascriptConsole',
+        'ProfilesSplashProxyFactory',
+        'SplashProxyRequest',
+
+        # QWebEngine objects
+        'QWebEngineProfile', 'QWebEnginePage', 'QWebEngineView',
+
+        # QWebEngine-based objects
+        'ChromiumBrowserTab', 'ChromiumWebPage',
+
+        # Lua-specific objects
+        'LuaRuntime', '_LuaObject', '_LuaTable', '_LuaIter', '_LuaThread',
+        '_LuaFunction', '_LuaCoroutineFunction', 'LuaError', 'LuaSyntaxError',
+        'AsyncBrowserCommand',
         '_ExposedRequest', '_ExposedBoundRequest',
         '_ExposedResponse', '_ExposedBoundResponse',
         '_ExposedTimer',
         '_ExposedElement', '_ExposedElementStyle', '_ExposedEvent',
-        'EventHandlersStorage', 'EventsStorage', ' ElementsStorage',
-        'BrowserTab', '_SplashHttpClient', 'JavascriptConsole',
-        'ProfilesSplashProxyFactory',
-        'SplashProxyRequest', 'Request', 'Deferred',
-        'LuaRuntime', '_LuaObject', '_LuaTable', '_LuaIter', '_LuaThread',
-        '_LuaFunction', '_LuaCoroutineFunction', 'LuaError', 'LuaSyntaxError',
-        'AsyncBrowserCommand',
     }
     counts = defaultdict(int)
     for o in gc.get_objects():
@@ -242,3 +263,11 @@ def traverse_data(obj, predicate, convert, max_depth=100):
         }
 
     return obj
+
+
+def swap_byte_order_i32(buf: bytes) -> bytes:
+    """ Swap order of bytes in each 32-bit word of given byte sequence. """
+    arr = array.array('I')
+    arr.frombytes(buf)
+    arr.byteswap()
+    return arr.tobytes()

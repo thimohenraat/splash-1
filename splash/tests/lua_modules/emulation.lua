@@ -8,7 +8,7 @@ local Splash = require("splash")
 
 --
 -- A method with a common workflow: go to a page, wait for some time.
--- splash.qtrender.DefaultRenderScript implements a similar logic in Python.
+-- splash.qtrender.WebkitDefaultRenderScript implements a similar logic in Python.
 --
 function Splash:go_and_wait(args)
   -- content-type for error messages. Callers should set their
@@ -24,6 +24,9 @@ function Splash:go_and_wait(args)
   local wait = tonumber(args.wait)
   if not wait and (self.args.render_all or self.args.viewport == "full") then
     error("non-zero 'wait' is required when rendering whole page")
+  end
+  if args.http2 ~= nil then
+    self.http2_enabled = tonumber(args.http2)
   end
 
   self.images_enabled = self.args.images
